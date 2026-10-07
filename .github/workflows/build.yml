@@ -14,6 +14,10 @@ jobs:
     #Run on Ubuntu using the latest version
     runs-on: ubuntu-latest
     #Job's steps
+    defaults:
+      run:
+        working-directory: lab1arqui
+        
     steps:
       #Check-out your repository under $GITHUB_WORKSPACE, so your workflow can access it
       - uses: actions/checkout@v3
