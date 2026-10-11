@@ -1,39 +1,152 @@
-#Workflow name
 name: CI/CD Pipeline
+
 on:
-  #Manually trigger workflow runs
   workflow_dispatch:
-  #Trigger the workflow on push from the main branch
   push:
     branches:
       - main
+      - feature/cloud-deploy   # rama nueva (trunk based): agrega aquí las que crees
+  pull_request:
+    branches:
+      - main
+
+# Los tests usan @SpringBootTest y necesitan MySQL. Spring Boot lee estas
+# variables y sobrescribe application.properties.
+env:
+  SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/bancoudea?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+  SPRING_DATASOURCE_USERNAME: root
+  SPRING_DATASOURCE_PASSWORD: root
+
 jobs:
-  #Test's job
+  # ---------------------------------------------------------------- 1. TESTS
   tests:
     name: Unit tests
-    #Run on Ubuntu using the latest version
     runs-on: ubuntu-latest
-    #Job's steps
     defaults:
       run:
         working-directory: lab1arqui
-
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: bancoudea
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
-      #Check-out your repository under $GITHUB_WORKSPACE, so your workflow can access it
-      - uses: actions/checkout@v3
-      #Set up JDK 11
-      - name: Set up JDK
-        uses: actions/setup-java@v1
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
         with:
+          distribution: temurin
           java-version: '21'
-      #Set up Maven cache
-      - name: Cache Maven packages
-        #This action allows caching dependencies and build outputs to improve workflow execution time.
-        uses: actions/cache@v3
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-m2
-      #Run Tests
+          cache: maven
       - name: Run Tests
         run: mvn -B test
+
+  # --------------------------------------------------------------- 2. SONAR
+  sonar:
+    name: SonarCloud analysis
+    needs: tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: lab1arqui
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: bancoudea
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build and test (genera reporte JaCoCo)
+        run: mvn -B clean verify
+      - name: SonarCloud analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # projectKey, organization y host.url salen de las <properties> del pom.xml
+        run: mvn -B org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.token=$SONAR_TOKEN
+
+  # --------------------------------------------------------------- 3. BUILD
+  build:
+    name: Build
+    needs: sonar
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lab1arqui
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build with Maven
+        run: mvn -B package -DskipTests
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifact
+          path: lab1arqui/target/lab1arqui.jar
+
+  # --------------------------------------------------------------- 4. DOCKER
+  # Solo en main: las ramas de feature validan (tests, sonar, build) sin publicar.
+  docker:
+    name: Docker image
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}   # usa un Access Token de Docker Hub
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./lab1arqui
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/lab1arqui:latest
+            ${{ secrets.DOCKER_USERNAME }}/lab1arqui:${{ github.sha }}
+
+  # --------------------------------------------------------------- 5. DEPLOY
+  deploy:
+    name: Deploy to Render
+    needs: docker
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy hook
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"
