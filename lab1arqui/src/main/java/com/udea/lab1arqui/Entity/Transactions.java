@@ -10,7 +10,7 @@ import java.time.LocalDateTime;
 public class Transactions {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private  long id;
 
     @Column (name = "sender_account_number", nullable = false)

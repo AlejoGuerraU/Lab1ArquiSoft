@@ -7,7 +7,7 @@ import jakarta.persistence.*;
 @Table(name="customer")
 public class Customer {
     @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     protected long id;
     @Column(unique = true, nullable = false)
     protected  String accountNumber;
