@@ -84,6 +84,11 @@ jobs:
           cache: maven
       - name: Build and test (genera reporte JaCoCo)
         run: mvn -B clean verify
+      - name: Check token
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then echo "SONAR_TOKEN VACIO"; exit 1; else echo "SONAR_TOKEN presente"; fi
       - name: SonarCloud analysis
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
